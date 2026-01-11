@@ -68,6 +68,14 @@
             overlay.remove();
         });
 
+        // 尝试支持滚动触发 (浏览器可能会拦截非用户手势的全屏请求)
+        overlay.addEventListener('wheel', (e) => {
+            e.preventDefault(); // 防止页面滚动
+            console.log('[CCTV Remote] 检测到滚动，尝试进入全屏');
+            enterFullscreen();
+            overlay.remove();
+        });
+
         document.body.appendChild(overlay);
     }
 
