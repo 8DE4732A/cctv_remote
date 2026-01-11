@@ -4,19 +4,19 @@
 // @version      1.0
 // @description  CCTV直播自动全屏 + WebSocket远程控制频道切换
 // @match        https://tv.cctv.com/live/*
-// @grant        none
+// @connect      14.103.199.253
+// @connect      127.0.0.1
+// @grant        GM_xmlhttpRequest
 // @run-at       document-idle
 // ==/UserScript==
 
-(function() {
+(function () {
     'use strict';
 
     // ==================== 配置 ====================
     const CONFIG = {
-        wsUrl: 'ws://localhost:8080',
-        reconnectInterval: 3000,
-        maxReconnectAttempts: 10,
-        heartbeatInterval: 30000
+        httpUrl: 'http://14.103.199.253:10000/poll',
+        pollInterval: 3000
     };
 
     // 支持的频道列表
@@ -101,9 +101,9 @@
     function enterFullscreen() {
         const container = findPlayerContainer();
         const requestFullscreen = container.requestFullscreen ||
-                                  container.webkitRequestFullscreen ||
-                                  container.mozRequestFullScreen ||
-                                  container.msRequestFullscreen;
+            container.webkitRequestFullscreen ||
+            container.mozRequestFullScreen ||
+            container.msRequestFullscreen;
 
         if (requestFullscreen) {
             requestFullscreen.call(container).catch(err => {
@@ -111,9 +111,9 @@
                 // 尝试对整个文档全屏
                 const docEl = document.documentElement;
                 const docFullscreen = docEl.requestFullscreen ||
-                                      docEl.webkitRequestFullscreen ||
-                                      docEl.mozRequestFullScreen ||
-                                      docEl.msRequestFullscreen;
+                    docEl.webkitRequestFullscreen ||
+                    docEl.mozRequestFullScreen ||
+                    docEl.msRequestFullscreen;
                 if (docFullscreen) {
                     docFullscreen.call(docEl).catch(e => {
                         console.log('[CCTV Remote] 文档全屏也失败:', e);
@@ -123,84 +123,52 @@
         }
     }
 
-    // ==================== WebSocket 远程控制 ====================
-    let ws = null;
-    let reconnectAttempts = 0;
-    let heartbeatTimer = null;
+    // ==================== HTTP 轮询远程控制 ====================
+    let pollIntervalId = null;
 
-    function connectWebSocket() {
-        if (ws && ws.readyState === WebSocket.OPEN) {
-            return;
-        }
+    function startPolling() {
+        if (pollIntervalId) return;
 
-        console.log('[CCTV Remote] 正在连接 WebSocket:', CONFIG.wsUrl);
+        console.log('[CCTV Remote] 开始 HTTP 轮询:', CONFIG.httpUrl);
+        showNotification('远程控制已启动 (HTTP)', 'success');
 
-        try {
-            ws = new WebSocket(CONFIG.wsUrl);
+        // 立即执行一次
+        pollServer();
 
-            ws.onopen = () => {
-                console.log('[CCTV Remote] WebSocket 已连接');
-                reconnectAttempts = 0;
-                showNotification('远程控制已连接', 'success');
-                startHeartbeat();
+        pollIntervalId = setInterval(pollServer, CONFIG.pollInterval);
+    }
 
-                // 发送当前频道信息
-                const currentChannel = getCurrentChannel();
-                ws.send(JSON.stringify({
-                    type: 'status',
-                    channel: currentChannel
-                }));
-            };
-
-            ws.onmessage = (event) => {
-                handleMessage(event.data);
-            };
-
-            ws.onclose = () => {
-                console.log('[CCTV Remote] WebSocket 已断开');
-                stopHeartbeat();
-                scheduleReconnect();
-            };
-
-            ws.onerror = (error) => {
-                console.log('[CCTV Remote] WebSocket 错误:', error);
-            };
-        } catch (error) {
-            console.log('[CCTV Remote] WebSocket 连接失败:', error);
-            scheduleReconnect();
+    function stopPolling() {
+        if (pollIntervalId) {
+            clearInterval(pollIntervalId);
+            pollIntervalId = null;
         }
     }
 
-    function scheduleReconnect() {
-        if (reconnectAttempts < CONFIG.maxReconnectAttempts) {
-            reconnectAttempts++;
-            console.log(`[CCTV Remote] ${CONFIG.reconnectInterval / 1000}秒后重连 (${reconnectAttempts}/${CONFIG.maxReconnectAttempts})`);
-            setTimeout(connectWebSocket, CONFIG.reconnectInterval);
-        } else {
-            console.log('[CCTV Remote] 达到最大重连次数，停止重连');
-            showNotification('远程控制连接失败', 'error');
-        }
-    }
-
-    function startHeartbeat() {
-        stopHeartbeat();
-        heartbeatTimer = setInterval(() => {
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ type: 'ping' }));
+    function pollServer() {
+        GM_xmlhttpRequest({
+            method: "GET",
+            url: CONFIG.httpUrl,
+            onload: function (response) {
+                if (response.status === 200) {
+                    try {
+                        const data = JSON.parse(response.responseText);
+                        handleMessage(data);
+                    } catch (e) {
+                        console.log('[CCTV Remote] 解析响应失败:', e);
+                    }
+                } else {
+                    console.log('[CCTV Remote] 轮询请求失败:', response.status);
+                }
+            },
+            onerror: function (error) {
+                console.log('[CCTV Remote] 轮询请求错误:', error);
             }
-        }, CONFIG.heartbeatInterval);
+        });
     }
 
-    function stopHeartbeat() {
-        if (heartbeatTimer) {
-            clearInterval(heartbeatTimer);
-            heartbeatTimer = null;
-        }
-    }
-
-    function handleMessage(data) {
+    function handleMessage(msg) {
         try {
-            const msg = JSON.parse(data);
             console.log('[CCTV Remote] 收到消息:', msg);
 
             switch (msg.action) {
@@ -260,9 +228,9 @@
 
     function exitFullscreen() {
         const exitFn = document.exitFullscreen ||
-                       document.webkitExitFullscreen ||
-                       document.mozCancelFullScreen ||
-                       document.msExitFullscreen;
+            document.webkitExitFullscreen ||
+            document.mozCancelFullScreen ||
+            document.msExitFullscreen;
         if (exitFn) {
             exitFn.call(document);
         }
@@ -331,8 +299,8 @@
             // 创建全屏按钮
             createFullscreenButton();
 
-            // 连接 WebSocket
-            connectWebSocket();
+            // 启动 HTTP 轮询
+            startPolling();
         }, 1000);
     }
 

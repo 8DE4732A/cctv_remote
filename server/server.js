@@ -1,70 +1,164 @@
-const WebSocket = require('ws');
 const http = require('http');
 
 // ==================== 配置 ====================
-const WS_PORT = 8080;
-const HTTP_PORT = 3000;
+const HTTP_PORT = 10000;
 
-// ==================== WebSocket 服务器 ====================
-const wss = new WebSocket.Server({ port: WS_PORT });
-const clients = new Set();
+// ==================== 状态 ====================
+// 存储最新的待发送命令
+let pendingCommand = null;
 
-console.log(`[WebSocket] 服务器已启动，监听端口 ${WS_PORT}`);
+// ==================== HTTP API 服务器 ====================
+const httpServer = http.createServer((req, res) => {
+    // 设置 CORS 头
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
 
-wss.on('connection', (ws, req) => {
-    const clientIp = req.socket.remoteAddress;
-    console.log(`[WebSocket] 新客户端连接: ${clientIp}`);
-    clients.add(ws);
+    const url = new URL(req.url, `http://localhost:${HTTP_PORT}`);
+    const path = url.pathname;
 
-    ws.on('message', (data) => {
-        try {
-            const msg = JSON.parse(data.toString());
-            console.log(`[WebSocket] 收到消息:`, msg);
-
-            switch (msg.type) {
-                case 'status':
-                    console.log(`[WebSocket] 客户端当前频道: ${msg.channel}`);
-                    break;
-                case 'ping':
-                    ws.send(JSON.stringify({ action: 'pong' }));
-                    break;
-                default:
-                    console.log(`[WebSocket] 未知消息类型: ${msg.type}`);
-            }
-        } catch (error) {
-            console.log(`[WebSocket] 消息解析失败:`, error.message);
+    // GET /poll - 客户端轮询接口
+    if (path === '/poll' && req.method === 'GET') {
+        if (pendingCommand) {
+            // 发送最新的命令，并清空
+            console.log(`[HTTP] 响应轮询，发送命令: ${pendingCommand.action}`);
+            res.end(JSON.stringify(pendingCommand));
+            pendingCommand = null;
+        } else {
+            // 无命令，返回 pong
+            res.end(JSON.stringify({ action: 'pong' }));
         }
-    });
+        return;
+    }
 
-    ws.on('close', () => {
-        console.log(`[WebSocket] 客户端断开: ${clientIp}`);
-        clients.delete(ws);
-    });
+    // GET /switch/:channel - 切换频道
+    const switchMatch = path.match(/^\/switch\/([a-zA-Z0-9]+)$/);
+    if (switchMatch && req.method === 'GET') {
+        const channel = switchMatch[1].toLowerCase();
+        pendingCommand = {
+            action: 'switch_channel',
+            channel: channel
+        };
+        console.log(`[HTTP] 收到切换频道请求: ${channel}, 更新待发送命令`);
 
-    ws.on('error', (error) => {
-        console.log(`[WebSocket] 错误:`, error.message);
-        clients.delete(ws);
-    });
+        res.end(JSON.stringify({
+            success: true,
+            channel: channel,
+            message: 'Command updated'
+        }));
+        return;
+    }
 
-    // 发送欢迎消息
-    ws.send(JSON.stringify({
-        action: 'welcome',
-        message: 'CCTV Remote Control Server'
+    // GET /fullscreen - 进入全屏
+    if (path === '/fullscreen' && req.method === 'GET') {
+        pendingCommand = { action: 'fullscreen' };
+        console.log(`[HTTP] 收到全屏请求, 更新待发送命令`);
+        res.end(JSON.stringify({
+            success: true,
+            action: 'fullscreen',
+            message: 'Command updated'
+        }));
+        return;
+    }
+
+    // GET /exit-fullscreen - 退出全屏
+    if (path === '/exit-fullscreen' && req.method === 'GET') {
+        pendingCommand = { action: 'exit_fullscreen' };
+        console.log(`[HTTP] 收到退出全屏请求, 更新待发送命令`);
+        res.end(JSON.stringify({
+            success: true,
+            action: 'exit_fullscreen',
+            message: 'Command updated'
+        }));
+        return;
+    }
+
+    // GET /web-fullscreen - 进入网页全屏
+    if (path === '/web-fullscreen' && req.method === 'GET') {
+        pendingCommand = { action: 'web_fullscreen' };
+        console.log(`[HTTP] 收到网页全屏请求, 更新待发送命令`);
+        res.end(JSON.stringify({
+            success: true,
+            action: 'web_fullscreen',
+            message: 'Command updated'
+        }));
+        return;
+    }
+
+    // GET /exit-web-fullscreen - 退出网页全屏
+    if (path === '/exit-web-fullscreen' && req.method === 'GET') {
+        pendingCommand = { action: 'exit_web_fullscreen' };
+        console.log(`[HTTP] 收到退出网页全屏请求, 更新待发送命令`);
+        res.end(JSON.stringify({
+            success: true,
+            action: 'exit_web_fullscreen',
+            message: 'Command updated'
+        }));
+        return;
+    }
+
+    // GET /status - 获取状态
+    if (path === '/status' && req.method === 'GET') {
+        res.end(JSON.stringify({
+            success: true,
+            hasPendingCommand: !!pendingCommand,
+            httpPort: HTTP_PORT
+        }));
+        return;
+    }
+
+    // GET /channels - 获取频道列表
+    if (path === '/channels' && req.method === 'GET') {
+        const channels = [
+            'cctv1', 'cctv2', 'cctv3', 'cctv4', 'cctv5', 'cctv5plus',
+            'cctv6', 'cctv7', 'cctv8', 'cctv9', 'cctv10', 'cctv11',
+            'cctv12', 'cctv13', 'cctv14', 'cctv15', 'cctv16', 'cctv17',
+            'cctveurope', 'cctvamerica'
+        ];
+        res.end(JSON.stringify({
+            success: true,
+            channels: channels
+        }));
+        return;
+    }
+
+    // GET / - 控制面板网页
+    if (path === '/' && req.method === 'GET') {
+        res.setHeader('Content-Type', 'text/html; charset=utf-8');
+        res.end(getControlPanelHTML());
+        return;
+    }
+
+    // GET /api - API 帮助信息
+    if (path === '/api' && req.method === 'GET') {
+        res.end(JSON.stringify({
+            name: 'CCTV Remote Control Server',
+            endpoints: {
+                'GET /poll': '客户端轮询接口',
+                'GET /switch/:channel': '切换频道 (例: /switch/cctv2)',
+                'GET /fullscreen': '进入浏览器全屏',
+                'GET /exit-fullscreen': '退出浏览器全屏',
+                'GET /web-fullscreen': '进入网页全屏',
+                'GET /exit-web-fullscreen': '退出网页全屏',
+                'GET /status': '获取服务器状态',
+                'GET /channels': '获取频道列表'
+            },
+            examples: [
+                'curl http://localhost:10000/switch/cctv1',
+                'curl http://localhost:10000/poll',
+                'curl http://localhost:10000/status'
+            ]
+        }, null, 2));
+        return;
+    }
+
+    // 404
+    res.statusCode = 404;
+    res.end(JSON.stringify({
+        success: false,
+        error: 'Not Found',
+        hint: '访问 / 获取帮助信息'
     }));
 });
-
-// 广播消息给所有客户端
-function broadcast(message) {
-    const data = JSON.stringify(message);
-    let sent = 0;
-    clients.forEach((client) => {
-        if (client.readyState === WebSocket.OPEN) {
-            client.send(data);
-            sent++;
-        }
-    });
-    return sent;
-}
 
 // 控制面板 HTML
 function getControlPanelHTML() {
@@ -165,8 +259,7 @@ function getControlPanelHTML() {
     <div class="container">
         <h1>CCTV 遥控器</h1>
         <div class="status">
-            <span class="status-dot disconnected" id="statusDot"></span>
-            <span id="statusText">未连接</span>
+            <span id="statusText">正在运行</span>
         </div>
 
         <div class="section">
@@ -217,7 +310,6 @@ function getControlPanelHTML() {
             btn.className = 'btn';
             btn.textContent = ch.name;
             btn.onclick = () => switchChannel(ch.id);
-            btn.id = 'ch-' + ch.id;
             channelsContainer.appendChild(btn);
         });
 
@@ -251,185 +343,12 @@ function getControlPanelHTML() {
             toast.classList.add('show');
             setTimeout(() => toast.classList.remove('show'), 2000);
         }
-
-        function updateStatus() {
-            fetch('/status')
-                .then(r => r.json())
-                .then(data => {
-                    const dot = document.getElementById('statusDot');
-                    const text = document.getElementById('statusText');
-                    if (data.clients > 0) {
-                        dot.className = 'status-dot connected';
-                        text.textContent = '已连接 ' + data.clients + ' 个客户端';
-                    } else {
-                        dot.className = 'status-dot disconnected';
-                        text.textContent = '无客户端连接';
-                    }
-                });
-        }
-
-        updateStatus();
-        setInterval(updateStatus, 3000);
     </script>
 </body>
 </html>`;
 }
 
-// ==================== HTTP API 服务器 ====================
-const httpServer = http.createServer((req, res) => {
-    // 设置 CORS 头
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Content-Type', 'application/json; charset=utf-8');
-
-    const url = new URL(req.url, `http://localhost:${HTTP_PORT}`);
-    const path = url.pathname;
-
-    // GET /switch/:channel - 切换频道
-    const switchMatch = path.match(/^\/switch\/([a-zA-Z0-9]+)$/);
-    if (switchMatch && req.method === 'GET') {
-        const channel = switchMatch[1].toLowerCase();
-        const sent = broadcast({
-            action: 'switch_channel',
-            channel: channel
-        });
-        console.log(`[HTTP] 切换频道: ${channel}, 发送给 ${sent} 个客户端`);
-        res.end(JSON.stringify({
-            success: true,
-            channel: channel,
-            clients: sent
-        }));
-        return;
-    }
-
-    // GET /fullscreen - 进入全屏
-    if (path === '/fullscreen' && req.method === 'GET') {
-        const sent = broadcast({ action: 'fullscreen' });
-        console.log(`[HTTP] 全屏命令, 发送给 ${sent} 个客户端`);
-        res.end(JSON.stringify({
-            success: true,
-            action: 'fullscreen',
-            clients: sent
-        }));
-        return;
-    }
-
-    // GET /exit-fullscreen - 退出全屏
-    if (path === '/exit-fullscreen' && req.method === 'GET') {
-        const sent = broadcast({ action: 'exit_fullscreen' });
-        console.log(`[HTTP] 退出全屏命令, 发送给 ${sent} 个客户端`);
-        res.end(JSON.stringify({
-            success: true,
-            action: 'exit_fullscreen',
-            clients: sent
-        }));
-        return;
-    }
-
-    // GET /web-fullscreen - 进入网页全屏（自动，无需用户点击）
-    if (path === '/web-fullscreen' && req.method === 'GET') {
-        const sent = broadcast({ action: 'web_fullscreen' });
-        console.log(`[HTTP] 网页全屏命令, 发送给 ${sent} 个客户端`);
-        res.end(JSON.stringify({
-            success: true,
-            action: 'web_fullscreen',
-            clients: sent
-        }));
-        return;
-    }
-
-    // GET /exit-web-fullscreen - 退出网页全屏
-    if (path === '/exit-web-fullscreen' && req.method === 'GET') {
-        const sent = broadcast({ action: 'exit_web_fullscreen' });
-        console.log(`[HTTP] 退出网页全屏命令, 发送给 ${sent} 个客户端`);
-        res.end(JSON.stringify({
-            success: true,
-            action: 'exit_web_fullscreen',
-            clients: sent
-        }));
-        return;
-    }
-
-    // GET /status - 获取状态
-    if (path === '/status' && req.method === 'GET') {
-        res.end(JSON.stringify({
-            success: true,
-            clients: clients.size,
-            wsPort: WS_PORT,
-            httpPort: HTTP_PORT
-        }));
-        return;
-    }
-
-    // GET /channels - 获取频道列表
-    if (path === '/channels' && req.method === 'GET') {
-        const channels = [
-            'cctv1', 'cctv2', 'cctv3', 'cctv4', 'cctv5', 'cctv5plus',
-            'cctv6', 'cctv7', 'cctv8', 'cctv9', 'cctv10', 'cctv11',
-            'cctv12', 'cctv13', 'cctv14', 'cctv15', 'cctv16', 'cctv17',
-            'cctveurope', 'cctvamerica'
-        ];
-        res.end(JSON.stringify({
-            success: true,
-            channels: channels
-        }));
-        return;
-    }
-
-    // GET / - 控制面板网页
-    if (path === '/' && req.method === 'GET') {
-        res.setHeader('Content-Type', 'text/html; charset=utf-8');
-        res.end(getControlPanelHTML());
-        return;
-    }
-
-    // GET /api - API 帮助信息
-    if (path === '/api' && req.method === 'GET') {
-        res.end(JSON.stringify({
-            name: 'CCTV Remote Control Server',
-            endpoints: {
-                'GET /switch/:channel': '切换频道 (例: /switch/cctv2)',
-                'GET /fullscreen': '进入浏览器全屏（需用户点击触发）',
-                'GET /exit-fullscreen': '退出浏览器全屏',
-                'GET /web-fullscreen': '进入网页全屏（自动，无需点击）',
-                'GET /exit-web-fullscreen': '退出网页全屏',
-                'GET /status': '获取服务器状态',
-                'GET /channels': '获取频道列表'
-            },
-            examples: [
-                'curl http://localhost:3000/switch/cctv1',
-                'curl http://localhost:3000/switch/cctv13',
-                'curl http://localhost:3000/web-fullscreen',
-                'curl http://localhost:3000/exit-web-fullscreen',
-                'curl http://localhost:3000/status'
-            ]
-        }, null, 2));
-        return;
-    }
-
-    // 404
-    res.statusCode = 404;
-    res.end(JSON.stringify({
-        success: false,
-        error: 'Not Found',
-        hint: '访问 / 获取帮助信息'
-    }));
-});
-
 httpServer.listen(HTTP_PORT, () => {
     console.log(`[HTTP] API 服务器已启动，监听端口 ${HTTP_PORT}`);
-    console.log('');
-    console.log('='.repeat(50));
-    console.log('CCTV Remote Control Server 已启动');
-    console.log('='.repeat(50));
-    console.log('');
-    console.log('使用方法:');
-    console.log(`  切换到 CCTV-1:  curl http://localhost:${HTTP_PORT}/switch/cctv1`);
-    console.log(`  切换到 CCTV-13: curl http://localhost:${HTTP_PORT}/switch/cctv13`);
-    console.log(`  网页全屏:       curl http://localhost:${HTTP_PORT}/web-fullscreen`);
-    console.log(`  退出网页全屏:   curl http://localhost:${HTTP_PORT}/exit-web-fullscreen`);
-    console.log(`  查看状态:       curl http://localhost:${HTTP_PORT}/status`);
-    console.log(`  频道列表:       curl http://localhost:${HTTP_PORT}/channels`);
-    console.log('');
-    console.log(`WebSocket 地址: ws://localhost:${WS_PORT}`);
-    console.log('');
+    console.log('支持轮询 (/poll) 和控制面板 (/)');
 });
