@@ -63,9 +63,23 @@
 
         overlay.appendChild(hint);
 
+        // Android TV 遥控器确认键支持 (Enter / DPAD_CENTER)
+        const handleKeydown = (e) => {
+            if (e.key === 'Enter' || e.keyCode === 13 || e.keyCode === 23) {
+                console.log('[CCTV Remote] 检测到遥控器确认键，进入全屏');
+                enterFullscreen();
+                removeOverlay();
+            }
+        };
+
+        const removeOverlay = () => {
+            overlay.remove();
+            document.removeEventListener('keydown', handleKeydown);
+        };
+
         overlay.addEventListener('click', () => {
             enterFullscreen();
-            overlay.remove();
+            removeOverlay();
         });
 
         // 尝试支持滚动触发 (浏览器可能会拦截非用户手势的全屏请求)
@@ -73,9 +87,10 @@
             e.preventDefault(); // 防止页面滚动
             console.log('[CCTV Remote] 检测到滚动，尝试进入全屏');
             enterFullscreen();
-            overlay.remove();
+            removeOverlay();
         });
 
+        document.addEventListener('keydown', handleKeydown);
         document.body.appendChild(overlay);
     }
 
