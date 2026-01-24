@@ -12,6 +12,7 @@ CCTV 直播远程控制油猴脚本 - 支持自动全屏播放和 HTTP 远程控
 - **远程控制**：通过 HTTP 轮询机制，支持局域网内远程切换频道和控制全屏。
 - **跨域支持**：使用 `GM_xmlhttpRequest` 解决 Web 页面与本地服务的跨域问题。
 - **状态同步**：服务端维护最新指令状态，避免指令堆积。
+- **访问控制**：API Key 鉴权 + IP 国家/地区限制（可选）。
 
 ## 项目结构
 
@@ -45,16 +46,18 @@ npm start
 - 控制面板 & API 服务：`http://localhost:10000`
 - 轮询接口：`http://localhost:10000/poll`
 
+启动日志会输出 API Key（如未配置会自动生成）。
+
 ### 2. 安装油猴脚本
 
 1. 安装浏览器扩展 [Tampermonkey](https://www.tampermonkey.net/)
 2. 添加新脚本，将 `cctv-remote-control.user.js` 的内容粘贴进去并保存。
-3. **重要**：脚本头部需配置服务器地址。默认配置指向 `http://127.0.0.1:10000/poll`。如服务器在另一台机器，请修改 IP：
+3. **重要**：脚本头部需配置服务器地址。默认配置指向 `http://127.0.0.1:10000/poll`。如服务器在另一台机器，请修改 IP，并附上 API Key：
 
 ```javascript
 const CONFIG = {
-    // 修改为你的服务器 IP
-    httpUrl: 'http://192.168.1.100:10000/poll', 
+    // 修改为你的服务器 IP，携带 API Key
+    httpUrl: 'http://192.168.1.100:10000/poll?key=YOUR_KEY',
     pollInterval: 3000
 };
 ```
@@ -63,17 +66,28 @@ const CONFIG = {
 
 ## HTTP API 控制
 
-你可以通过浏览器访问控制面板 (`http://localhost:10000`) 进行操作，或直接调用 HTTP API：
+你可以通过浏览器访问控制面板 (`http://localhost:10000`) 进行操作（首次会提示输入 API Key，并保存到 LocalStorage），或直接调用 HTTP API：
 
 | 接口 | 说明 | 示例 |
 |------|------|------|
-| `GET /switch/:channel` | 切换频道 | `curl http://localhost:10000/switch/cctv1` |
-| `GET /fullscreen` | 进入浏览器全屏 | `curl http://localhost:10000/fullscreen` |
-| `GET /exit-fullscreen` | 退出浏览器全屏 | `curl http://localhost:10000/exit-fullscreen` |
-| `GET /web-fullscreen` | 进入网页全屏 | `curl http://localhost:10000/web-fullscreen` |
-| `GET /exit-web-fullscreen` | 退出网页全屏 | `curl http://localhost:10000/exit-web-fullscreen` |
-| `GET /status` | 查看状态 | `curl http://localhost:10000/status` |
-| `GET /channels` | 获取频道列表 | `curl http://localhost:10000/channels` |
+| `GET /switch/:channel` | 切换频道 | `curl -H "Authorization: Bearer YOUR_KEY" http://localhost:10000/switch/cctv1` |
+| `GET /fullscreen` | 进入浏览器全屏 | `curl -H "Authorization: Bearer YOUR_KEY" http://localhost:10000/fullscreen` |
+| `GET /exit-fullscreen` | 退出浏览器全屏 | `curl -H "Authorization: Bearer YOUR_KEY" http://localhost:10000/exit-fullscreen` |
+| `GET /web-fullscreen` | 进入网页全屏 | `curl -H "Authorization: Bearer YOUR_KEY" http://localhost:10000/web-fullscreen` |
+| `GET /exit-web-fullscreen` | 退出网页全屏 | `curl -H "Authorization: Bearer YOUR_KEY" http://localhost:10000/exit-web-fullscreen` |
+| `GET /status` | 查看状态 | `curl -H "Authorization: Bearer YOUR_KEY" http://localhost:10000/status` |
+| `GET /channels` | 获取频道列表 | `curl -H "Authorization: Bearer YOUR_KEY" http://localhost:10000/channels` |
+
+### 访问控制配置
+
+- `API_KEY`：API 鉴权密钥；未配置时会随机生成并打印到控制台日志。
+- `ALLOWED_COUNTRIES`：允许访问的国家/地区（ISO 国家码，逗号分隔，如 `US,CA`）。为空则不限制。
+
+示例：
+
+```bash
+API_KEY=YOUR_KEY ALLOWED_COUNTRIES=US,CA npm start
+```
 
 ## Android TV 支持
 

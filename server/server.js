@@ -1,11 +1,56 @@
 const http = require('http');
+const crypto = require('crypto');
+const geoip = require('geoip-lite');
 
 // ==================== 配置 ====================
 const HTTP_PORT = 10000;
+const RAW_API_KEY = (process.env.API_KEY || '').trim();
+const API_KEY = RAW_API_KEY || crypto.randomBytes(32).toString('hex');
+const API_KEY_SOURCE = RAW_API_KEY ? 'env' : 'generated';
+const ALLOWED_COUNTRIES = (process.env.ALLOWED_COUNTRIES || '')
+    .split(',')
+    .map((country) => country.trim().toUpperCase())
+    .filter(Boolean);
 
 // ==================== 状态 ====================
 // 存储最新的待发送命令
 let pendingCommand = null;
+
+function getClientIp(req) {
+    let ip = req.socket?.remoteAddress || '';
+    if (ip.startsWith('::ffff:')) {
+        ip = ip.slice(7);
+    }
+    if (ip === '::1') {
+        ip = '127.0.0.1';
+    }
+    return ip;
+}
+
+function isAllowedCountry(ip) {
+    if (!ALLOWED_COUNTRIES.length) {
+        return true;
+    }
+    const lookup = geoip.lookup(ip);
+    if (!lookup || !lookup.country) {
+        return false;
+    }
+    return ALLOWED_COUNTRIES.includes(lookup.country.toUpperCase());
+}
+
+function getApiKey(req, url) {
+    const authHeader = req.headers.authorization || '';
+    if (authHeader.toLowerCase().startsWith('bearer ')) {
+        return authHeader.slice(7).trim();
+    }
+    const key = url.searchParams.get('key');
+    return key ? key.trim() : '';
+}
+
+function sendJson(res, statusCode, payload) {
+    res.statusCode = statusCode;
+    res.end(JSON.stringify(payload));
+}
 
 // ==================== HTTP API 服务器 ====================
 const httpServer = http.createServer((req, res) => {
@@ -15,18 +60,39 @@ const httpServer = http.createServer((req, res) => {
 
     const url = new URL(req.url, `http://localhost:${HTTP_PORT}`);
     const path = url.pathname;
+    const clientIp = getClientIp(req);
+
+    if (!isAllowedCountry(clientIp)) {
+        return sendJson(res, 403, {
+            success: false,
+            error: 'Forbidden',
+            message: 'IP not allowed by country restriction',
+            ip: clientIp
+        });
+    }
+
+    if (path !== '/') {
+        const requestKey = getApiKey(req, url);
+        if (requestKey !== API_KEY) {
+            return sendJson(res, 401, {
+                success: false,
+                error: 'Unauthorized',
+                message: 'Missing or invalid API key'
+            });
+        }
+    }
 
     // GET /poll - 客户端轮询接口
     if (path === '/poll' && req.method === 'GET') {
         if (pendingCommand) {
             // 发送最新的命令，并清空
             console.log(`[HTTP] 响应轮询，发送命令: ${pendingCommand.action}`);
-            res.end(JSON.stringify(pendingCommand));
-            pendingCommand = null;
-        } else {
-            // 无命令，返回 pong
-            res.end(JSON.stringify({ action: 'pong' }));
-        }
+        res.end(JSON.stringify(pendingCommand));
+        pendingCommand = null;
+    } else {
+        // 无命令，返回 pong
+        res.end(JSON.stringify({ action: 'pong' }));
+    }
         return;
     }
 
@@ -132,6 +198,18 @@ const httpServer = http.createServer((req, res) => {
     if (path === '/api' && req.method === 'GET') {
         res.end(JSON.stringify({
             name: 'CCTV Remote Control Server',
+            auth: {
+                required: true,
+                methods: [
+                    'Authorization: Bearer <key>',
+                    '?key=<key>'
+                ],
+                note: 'API key is generated at startup if not configured'
+            },
+            countryRestriction: {
+                allowedCountries: ALLOWED_COUNTRIES,
+                note: 'Uses geoip-lite; empty means allow all countries'
+            },
             endpoints: {
                 'GET /poll': '客户端轮询接口',
                 'GET /switch/:channel': '切换频道 (例: /switch/cctv2)',
@@ -143,9 +221,9 @@ const httpServer = http.createServer((req, res) => {
                 'GET /channels': '获取频道列表'
             },
             examples: [
-                'curl http://localhost:10000/switch/cctv1',
-                'curl http://localhost:10000/poll',
-                'curl http://localhost:10000/status'
+                'curl -H "Authorization: Bearer YOUR_KEY" http://localhost:10000/switch/cctv1',
+                'curl -H "Authorization: Bearer YOUR_KEY" http://localhost:10000/poll',
+                'curl -H "Authorization: Bearer YOUR_KEY" http://localhost:10000/status'
             ]
         }, null, 2));
         return;
@@ -313,8 +391,35 @@ function getControlPanelHTML() {
             channelsContainer.appendChild(btn);
         });
 
+        const storedKey = window.localStorage.getItem('cctv_api_key');
+        let apiKey = storedKey || window.prompt('请输入 API Key');
+        if (apiKey) {
+            window.localStorage.setItem('cctv_api_key', apiKey);
+        }
+
+        function withAuth(options = {}) {
+            if (!apiKey) {
+                return options;
+            }
+            return {
+                ...options,
+                headers: {
+                    ...(options.headers || {}),
+                    Authorization: 'Bearer ' + apiKey
+                }
+            };
+        }
+
+        function fetchWithAuth(path) {
+            if (!apiKey) {
+                showToast('请先设置 API Key');
+                return Promise.reject(new Error('Missing API key'));
+            }
+            return fetch(path, withAuth());
+        }
+
         function switchChannel(channel) {
-            fetch('/switch/' + channel)
+            fetchWithAuth('/switch/' + channel)
                 .then(r => r.json())
                 .then(data => {
                     if (data.success) {
@@ -327,7 +432,7 @@ function getControlPanelHTML() {
         }
 
         function sendCommand(cmd) {
-            fetch('/' + cmd)
+            fetchWithAuth('/' + cmd)
                 .then(r => r.json())
                 .then(data => {
                     if (data.success) {
@@ -351,4 +456,6 @@ function getControlPanelHTML() {
 httpServer.listen(HTTP_PORT, () => {
     console.log(`[HTTP] API 服务器已启动，监听端口 ${HTTP_PORT}`);
     console.log('支持轮询 (/poll) 和控制面板 (/)');
+    console.log(`[HTTP] API Key (${API_KEY_SOURCE}): ${API_KEY}`);
+    console.log(`[HTTP] Allowed countries: ${ALLOWED_COUNTRIES.length ? ALLOWED_COUNTRIES.join(', ') : 'all'}`);
 });
